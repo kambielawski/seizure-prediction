@@ -1,5 +1,8 @@
 import os
 import pickle
+import copy
+import itertools
+import random
 from datetime import timedelta
 
 import numpy as np
@@ -272,6 +275,10 @@ class DataManager:
                 data[patient.name] = dict()
                 for edf_file in patient.edf_files:
 
+                    if 'channel_map' not in patient.edf_files[edf_file]:
+                        # patient.edf_files.pop(edf_file)
+                        continue
+
                     # Set up data structure 
                     data[patient.name][edf_file] = dict()
 
@@ -279,8 +286,6 @@ class DataManager:
                     edf_file_path = patient.edf_files[edf_file]['file_path']
                     raw = mne.io.read_raw_edf(edf_file_path)
 
-                    if 'channel_map' not in patient.edf_files[edf_file]:
-                        continue
 
                     # Mark the bad channels
                     bads = []
@@ -292,8 +297,10 @@ class DataManager:
                     # Create the epoch events 
                     events = mne.make_fixed_length_events(raw, start=0, stop=None, duration=epoch_length)
 
+                    tmax = epoch_length - (1 / raw.info['sfreq'])
+
                     # Create the actual epoch object
-                    epochs = mne.Epochs(raw, events, tmin=0, tmax=epoch_length, baseline=None)
+                    epochs = mne.Epochs(raw, events, tmin=0, tmax=tmax, baseline=None)
                     epochs.drop_bad() # Drops "bad" epochs (mostly beginning and end)
 
                     # LABELS: 
@@ -372,35 +379,124 @@ class DataManager:
         with open(outfile, 'wb') as pf:
             pickle.dump(self.data, pf)
 
+    
+    def remove_file_info(self, data):
+
+        num_edf_files = sum([len(data[patient]) for patient in data])
+        n_total, n_ictal, n_preictal, n_interictal = self.count_epochs(data)
+
+        for patient in data:
+            print(patient)
+            all_epochs = [data[patient][file]['epochs'] for file in data[patient]]
+            all_epochs = sum([[e for e in epochs] for epochs in all_epochs], [])
+            all_labels = [data[patient][file]['labels'] for file in data[patient]]
+            all_labels = sum([[l for l in labels] for labels in all_labels], [])
+            print(len(all_epochs), len(all_labels))
+            data[patient] = {'epochs': all_epochs, 'labels': all_labels}
+
+        return data 
+        # print(len(all_epochs), len(all_labels))
+
+
+    
+    def select_channels(self, epochs, channels):
+        new_epochs = []
+        for e in epochs:
+            new_epochs.append(e.get_data(picks=channels)[0])
+        return new_epochs
+        
 
     def load_data_from_pkl(self, pkl_file_name):
         with open(pkl_file_name, 'rb') as pf:
             self.data = pickle.load(pf)
 
-
-    def count_epochs(self):
+    def loocv_splits(self):
+        for patient in self.data:
+            print(f'Training on patient: {patient}')
+            yield self.get_loocv_split(patient)
+    
+    def get_loocv_split(self, patient):
         if self.data == None:
             raise Error("no data loaded")
+        
+        left_out_patient = { patient: self.data[patient] }
+        training_data = copy.deepcopy(self.data)
+        del training_data[patient]
+
+        # training_data_balanced = self.get_balanced_sample(training_data)
+
+        # TODO: return formatted data for model training
+        return left_out_patient, training_data
+
+
+    # Assumes "flattened" data -- i.e. no file information
+    def get_balanced_obs(self, data, channels):
+        examples = []
+        labels = []
+        for patient in data:
+            print(patient)
+            inter, pre, ictal = self.get_balanced_sample({ patient: data[patient] }, channels)
+
+            examples += inter
+            labels += [0 for _ in range(len(inter))]
+            examples += pre
+            labels += [1 for _ in range(len(pre))]
+            examples += ictal
+            labels += [2 for _ in range(len(ictal))]
+
+        return examples, labels
+
+
+    # Assumes "flattened" data -- i.e. no file information
+    def get_balanced_sample(self, data, channels):
+        valid_files = []
+        for patient in data:
+            for file in data[patient]:
+                if all([ch in data[patient][file]['epochs'][0].ch_names for ch in channels]):
+                    valid_files.append(file)
+
+        n_total, n_ictal, n_preictal, n_interictal = self.count_epochs(data, valid_files)
+
+        interictal_sample = []
+        preictal_sample = []
+        ictal_sample = []
+
+        for patient in data:
+            all_labels = sum([list(zip(data[patient][file]['labels'], range(len(data[patient][file]['labels'])))) for file in data[patient] if file in valid_files], [])
+            all_labels_files = [file for file in data[patient] for _ in range(len(data[patient][file]['labels'])) if file in valid_files]
+            zipped = list(zip(all_labels, all_labels_files))
+
+            interictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 0], n_ictal)
+            preictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 1], n_ictal)
+            ictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 2], n_ictal)
+
+            interictal_sample += [data[patient][file]['epochs'][i] for i,file in interictal_indices]
+            preictal_sample += [data[patient][file]['epochs'][i] for i,file in preictal_indices]
+            ictal_sample += [data[patient][file]['epochs'][i] for i,file in ictal_indices]
+
+        return interictal_sample, preictal_sample, ictal_sample
+
+
+    def count_epochs(self, data, valid_files=None):
         total_epochs = 0
         total_ictal = 0
         total_preictal = 0
         total_interictal = 0
-        for patient in self.data:
-            for file in self.data[patient]:
-                if 'epochs' in self.data[patient][file]:
-                    num_epochs = len(self.data[patient][file]['epochs'])
-                    num_interictal = self.data[patient][file]['labels'].count(0)
-                    num_preictal = self.data[patient][file]['labels'].count(1)
-                    num_ictal = self.data[patient][file]['labels'].count(2)
+        for patient in data:
+            for file in data[patient]:
+                if valid_files == None or file in valid_files:
+                    if 'epochs' in data[patient][file]:
+                        num_epochs = len(data[patient][file]['epochs'])
+                        num_interictal = data[patient][file]['labels'].count(0)
+                        num_preictal = data[patient][file]['labels'].count(1)
+                        num_ictal = data[patient][file]['labels'].count(2)
 
-                    total_epochs += num_epochs
-                    total_ictal += num_ictal 
-                    total_preictal += num_preictal
-                    total_interictal += num_interictal
-        print('total: ', total_epochs)
-        print('ictal: ', total_ictal)
-        print('preictal: ', total_preictal)
-        print('interictal: ', total_interictal)
+                        total_epochs += num_epochs
+                        total_ictal += num_ictal 
+                        total_preictal += num_preictal
+                        total_interictal += num_interictal
+
+        return total_epochs, total_ictal, total_preictal, total_interictal
 
 
     def load_edf(self, edf_file, patient):
@@ -424,9 +520,6 @@ class DataManager:
         print(raw.info.get_channel_types())
         print(len(raw.info.get_channel_types()))
         
-
-
-
 
 
 
