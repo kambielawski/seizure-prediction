@@ -275,6 +275,8 @@ class DataManager:
                 data[patient.name] = dict()
                 for edf_file in patient.edf_files:
 
+                    print(f'=========\n{edf_file}\n========')
+
                     if 'channel_map' not in patient.edf_files[edf_file]:
                         # patient.edf_files.pop(edf_file)
                         continue
@@ -286,13 +288,18 @@ class DataManager:
                     edf_file_path = patient.edf_files[edf_file]['file_path']
                     raw = mne.io.read_raw_edf(edf_file_path)
 
-
                     # Mark the bad channels
                     bads = []
                     for channel in patient.edf_files[edf_file]['channel_map']:
                         if patient.edf_files[edf_file]['channel_map'][channel] in '-.':
                             bads.append(raw.info.ch_names[channel-1])
                     raw.info['bads'] = bads
+
+                    # Standardize the data
+                    eeg_data = raw.get_data()
+                    mean = np.mean(eeg_data, axis=1, keepdims=True)
+                    std = np.std(eeg_data, axis=1, keepdims=True)
+                    raw._data = (eeg_data - mean) / std
 
                     # Create the epoch events 
                     events = mne.make_fixed_length_events(raw, start=0, stop=None, duration=epoch_length)
@@ -411,10 +418,44 @@ class DataManager:
             self.data = pickle.load(pf)
 
     def loocv_splits(self):
-        for patient in self.data:
+        for patient in list(self.data.keys())[:3]:
             print(f'Training on patient: {patient}')
             yield self.get_loocv_split(patient)
     
+    def random_5050split(self): 
+        if self.data == None:
+            raise Error("no data loaded")
+
+        n_test = len(self.data.keys()) // 2
+        test_patients = random.sample(list(self.data.keys()), n_test)
+
+        # Testing set
+        validation_patients = { patient: self.data[patient] for patient in test_patients }
+
+        # Training set
+        training_data = copy.deepcopy(self.data)
+        for patient in test_patients: 
+            del training_data[patient]
+
+        return validation_patients, training_data
+
+
+
+    def train_test_split(self, patients):
+        if self.data == None:
+            raise Error("no data loaded")
+
+        # Testing set
+        validation_patients = { patient: self.data[patient] for patient in patients }
+
+        # Training set
+        training_data = copy.deepcopy(self.data)
+        for patient in patients: 
+            del training_data[patient]
+
+        return validation_patients, training_data
+        
+
     def get_loocv_split(self, patient):
         if self.data == None:
             raise Error("no data loaded")
@@ -430,12 +471,12 @@ class DataManager:
 
 
     # Assumes "flattened" data -- i.e. no file information
-    def get_balanced_obs(self, data, channels):
+    def get_balanced_obs(self, data, channels, interictal_multiplier=1):
         examples = []
         labels = []
         for patient in data:
             print(patient)
-            inter, pre, ictal = self.get_balanced_sample({ patient: data[patient] }, channels)
+            inter, pre, ictal = self.get_balanced_sample({ patient: data[patient] }, channels, interictal_multiplier=interictal_multiplier)
 
             examples += inter
             labels += [0 for _ in range(len(inter))]
@@ -448,7 +489,7 @@ class DataManager:
 
 
     # Assumes "flattened" data -- i.e. no file information
-    def get_balanced_sample(self, data, channels):
+    def get_balanced_sample(self, data, channels, interictal_multiplier=1):
         valid_files = []
         for patient in data:
             for file in data[patient]:
@@ -466,8 +507,8 @@ class DataManager:
             all_labels_files = [file for file in data[patient] for _ in range(len(data[patient][file]['labels'])) if file in valid_files]
             zipped = list(zip(all_labels, all_labels_files))
 
-            interictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 0], n_ictal)
-            preictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 1], n_ictal)
+            interictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 0], n_ictal*interictal_multiplier)
+            preictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 1], n_preictal)
             ictal_indices = random.sample([(og_idx,file) for i,((c,og_idx),file) in enumerate(zipped) if c == 2], n_ictal)
 
             interictal_sample += [data[patient][file]['epochs'][i] for i,file in interictal_indices]
@@ -498,6 +539,37 @@ class DataManager:
 
         return total_epochs, total_ictal, total_preictal, total_interictal
 
+    def plot_chb11(self):
+
+        raw_file = CHB_MIT_DATASET_PATH + '/chb11/chb11_99.edf'
+        raw = mne.io.read_raw_edf(raw_file)
+        timeseries = raw.get_data(picks=['P7-O1', 'P8-O2'])
+
+        ictal_intervals = self.data['chb11']['chb11_99.edf']['ictal_intervals']
+        preictal_intervals = self.data['chb11']['chb11_99.edf']['preictal_intervals']
+
+        # Get the time axis
+        print(timeseries.shape)
+        times = np.arange(0, timeseries.shape[1] / raw.info['sfreq'], 1 / raw.info['sfreq'])
+
+        # Plot the selected channels using Matplotlib
+        fig, axes = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
+
+        for idx, (ax, channel, channel_data) in enumerate(zip(axes, ['P7-O1', 'P8-O2'], timeseries)):
+            ax.plot(times, channel_data, label=channel)
+            ax.legend(loc='upper right')
+            ax.set_ylabel('Amplitude (µV)')
+            for s,e in ictal_intervals:
+                ax.axvspan(s, e, color='red', alpha=0.3)
+            for s,e in preictal_intervals:
+                ax.axvspan(s, e, color='yellow', alpha=0.3)
+
+            if idx == 0:
+                ax.set_title('chb11_99.edf Raw EEG Data')
+            if idx == 1:
+                ax.set_xlabel('Time (s)')
+
+        plt.show()
 
     def load_edf(self, edf_file, patient):
 
@@ -507,6 +579,28 @@ class DataManager:
         non_eeg_channels = list(filter(lambda name: 'EEG' not in name, raw.info.ch_names))
         raw.info['bads'] = non_eeg_channels
         # print(non_eeg_channels)
+
+        timeseries = raw.get_data(picks=['P7-O1', 'P8-O2'])
+
+        # Get the time axis
+        times = np.arange(0, timeseries.shape[1] / raw.info['sfreq'], 1 / raw.info['sfreq'])
+
+        # Plot the selected channels using Matplotlib
+        fig, axes = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
+
+        for idx, (ax, channel, channel_data) in enumerate(zip(axes, ['P7-O1', ''], timeseries)):
+            ax.plot(times, channel_data, label=channel)
+            ax.legend(loc='upper right')
+            ax.set_ylabel('Amplitude (µV)')
+            for s,e in ictal_intervals:
+                ax.axvspan(s, e, color='red', alpha=0.3)
+            for s,e in preictal_intervals:
+                ax.axvspan(s, e, color='yellow', alpha=0.3)
+
+            if idx == len(channels_to_plot) - 1:
+                ax.set_xlabel('Time (s)')
+
+        plt.show()
 
         data = np.array(raw.get_data(picks=['eeg']))
         
