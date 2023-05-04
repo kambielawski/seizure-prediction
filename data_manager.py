@@ -81,18 +81,6 @@ class DataManager:
         seizures = []
 
         for line in lines:
-            print(line)
-            print(';;;;')
-            '''
-            if line.startswith('File Start Time'):
-                # reg_start_time = line.split(':')[-1].strip()
-                rec_start_time = '.'.join(line.split(':')[-3:]).strip()
-                rec_start_time_delta = convert_to_timedelta(rec_start_time)
-            elif line.startswith('File End Time'):
-                # reg_end_time = line.split(':')[-1].strip()
-                rec_end_time = '.'.join(line.split(':')[-3:]).strip()
-                rec_end_time_delta = convert_to_timedelta(rec_end_time)
-            '''
             if line.startswith('File Name'):
                 file_name = line.split(':')[-1].strip()
             elif line.startswith('Seizure') or line.startswith('Start time'):
@@ -199,8 +187,6 @@ class DataManager:
         splitted_text = [s.strip() for s in splitted_text]
         splitted_text = list(filter(lambda s: s != '', splitted_text))
 
-        print(patient.name)
-
         current_channel_map = None
         for component in splitted_text:
             if component.startswith('Seizure'):
@@ -213,7 +199,6 @@ class DataManager:
                 channel_map = self.parse_siena_channels(component)
                 current_channel_map = channel_map
 
-        # return edf_file_name, seizure
 
 
     def parse_siena_channels(self, channels_txt):
@@ -345,33 +330,6 @@ class DataManager:
                                 labels.append(2)
                             else:
                                 labels.append(0)
-
-                        '''
-                        # Get the data from the raw object
-                        channels_to_plot = raw.ch_names[:3]
-                        timeseries = raw.get_data(picks=channels_to_plot)
-
-                        # Get the time axis
-                        times = np.arange(0, timeseries.shape[1] / raw.info['sfreq'], 1 / raw.info['sfreq'])
-
-                        # Plot the selected channels using Matplotlib
-                        fig, axes = plt.subplots(len(channels_to_plot), 1, figsize=(15, 6), sharex=True)
-
-                        for idx, (ax, channel, channel_data) in enumerate(zip(axes, channels_to_plot, timeseries)):
-                            ax.plot(times, channel_data, label=channel)
-                            ax.legend(loc='upper right')
-                            ax.set_ylabel('Amplitude (µV)')
-                            for s,e in ictal_intervals:
-                                ax.axvspan(s, e, color='red', alpha=0.3)
-                            for s,e in preictal_intervals:
-                                ax.axvspan(s, e, color='yellow', alpha=0.3)
-
-                            if idx == len(channels_to_plot) - 1:
-                                ax.set_xlabel('Time (s)')
-
-                        plt.show()
-                        print(timeseries.shape)
-                        '''
 
                     # Insert data into data dictionary
                     data[patient.name][edf_file]['labels'] = labels
@@ -540,7 +498,6 @@ class DataManager:
         return total_epochs, total_ictal, total_preictal, total_interictal
 
     def plot_chb11(self):
-
         raw_file = CHB_MIT_DATASET_PATH + '/chb11/chb11_99.edf'
         raw = mne.io.read_raw_edf(raw_file)
         timeseries = raw.get_data(picks=['P7-O1', 'P8-O2'])
@@ -570,51 +527,4 @@ class DataManager:
                 ax.set_xlabel('Time (s)')
 
         plt.show()
-
-    def load_edf(self, edf_file, patient):
-
-        raw = mne.io.read_raw_edf(edf_file) 
-        print(raw)
-        print(raw.info)
-        non_eeg_channels = list(filter(lambda name: 'EEG' not in name, raw.info.ch_names))
-        raw.info['bads'] = non_eeg_channels
-        # print(non_eeg_channels)
-
-        timeseries = raw.get_data(picks=['P7-O1', 'P8-O2'])
-
-        # Get the time axis
-        times = np.arange(0, timeseries.shape[1] / raw.info['sfreq'], 1 / raw.info['sfreq'])
-
-        # Plot the selected channels using Matplotlib
-        fig, axes = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
-
-        for idx, (ax, channel, channel_data) in enumerate(zip(axes, ['P7-O1', ''], timeseries)):
-            ax.plot(times, channel_data, label=channel)
-            ax.legend(loc='upper right')
-            ax.set_ylabel('Amplitude (µV)')
-            for s,e in ictal_intervals:
-                ax.axvspan(s, e, color='red', alpha=0.3)
-            for s,e in preictal_intervals:
-                ax.axvspan(s, e, color='yellow', alpha=0.3)
-
-            if idx == len(channels_to_plot) - 1:
-                ax.set_xlabel('Time (s)')
-
-        plt.show()
-
-        data = np.array(raw.get_data(picks=['eeg']))
-        
-        t = 1000
-        plt.plot(np.arange(t), data[0][:t])
-        plt.show()
-
-        print(data.shape)
-        
-
-        print(raw.info.get_channel_types())
-        print(len(raw.info.get_channel_types()))
-        
-
-
-
 

@@ -16,10 +16,10 @@ parser.add_argument('results_file')
 args = parser.parse_args()
 
 channel_selections = {
-    # 2: ['P7-O1', 'P8-O2'],
-    # 4: ['P7-O1', 'P8-O2', 'P3-O1', 'P4-O2'],
-    # 6: ['P7-O1', 'P8-O2', 'P3-O1', 'P4-O2', 'T7-P7', 'T8-P8-0'],
-    # 8: ['P7-O1', 'P8-O2', 'P3-O1', 'P4-O2', 'T7-P7', 'T8-P8-0', 'C3-P3', 'C4-P4'],
+    2: ['P7-O1', 'P8-O2'],
+    4: ['P7-O1', 'P8-O2', 'P3-O1', 'P4-O2'],
+    6: ['P7-O1', 'P8-O2', 'P3-O1', 'P4-O2', 'T7-P7', 'T8-P8-0'],
+    8: ['P7-O1', 'P8-O2', 'P3-O1', 'P4-O2', 'T7-P7', 'T8-P8-0', 'C3-P3', 'C4-P4'],
     9: ['P7-O1', 'P8-O2', 'P3-O1', 'P4-O2', 'T7-P7', 'T8-P8-0', 'C3-P3', 'C4-P4', 'CZ-PZ'],
 }
 
@@ -28,6 +28,9 @@ device = torch.device("mps")
 d = DataManager()
 m = ModelManager()
 
+'''
+Visualizes a model's prediction of a single edf file
+'''
 def visualize_deployment(edf_dict, preds, file, n_channels):
     ictal_intervals = edf_dict['ictal_intervals']
     preictal_intervals = edf_dict['preictal_intervals']
@@ -44,6 +47,10 @@ def visualize_deployment(edf_dict, preds, file, n_channels):
     plt.legend()
     plt.show()
 
+
+'''
+Visualizes a model's prediction of a single edf file WITH WARNINGS as vertical lines
+'''
 def visualize_with_warnings(edf_dict, warnings, preds, file, n_channels):
     ictal_intervals = edf_dict['ictal_intervals']
     preictal_intervals = edf_dict['preictal_intervals']
@@ -64,6 +71,9 @@ def visualize_with_warnings(edf_dict, warnings, preds, file, n_channels):
     plt.legend()
     plt.show()
 
+'''
+Makes predictions for an EDF file's epochs
+'''
 def test_deployment(model, edf_dict, n_channels):
     epochs = np.array([np.array(e) for e in edf_dict['epochs'].get_data(picks=channel_selections[n_channels])])
     labels = edf_dict['labels']
@@ -93,7 +103,9 @@ def test_deployment(model, edf_dict, n_channels):
     
     return np.array(preds)
 
-
+'''
+Generates warnings based on a given value of k consecutive preictal/ictal classifications
+'''
 def deployment_warnings(preds, true, k=3):
     warnings = []
     n_warnings = 0
@@ -171,16 +183,17 @@ if __name__ == '__main__':
     # Load data
     d.load_data_from_pkl('data_pe600_epoch2.pkl')
 
-    # Load in model and weights/biases
-
     testing, training = d.train_test_split(['chb11', 'chb16', 'chb18', 'chb04'])
 
     nch2fprate = {}
     nch2accuracies = {}
+
+    # Search for value of k for each of the channel configs
     for nch in channel_selections:
-        model = CNN_4layer_big(nch) 
+        model = CNN_4layer_big(nch)
         model_file = args.results_file.replace('2.', str(nch)+'.')
         print(model_file)
+        # Load in model and weights/biases
         model_state_dict = m.load_model_from_pkl(model_file)
         model.load_state_dict(model_state_dict)
         fprates, accuracies = find_best_k(model, testing, nch)
@@ -191,10 +204,9 @@ if __name__ == '__main__':
         pickle.dump(nch2fprate, pf)
     with open('accuracies.pkl', 'wb') as pf:
         pickle.dump(nch2accuracies, pf)
-    exit(1)
 
-    print(n_channels)
-
+    # Uncomment for visualization of warnings 
+    '''
     model = CNN_4layer_big(n_channels) 
     model_file = args.results_file
     model_state_dict = m.load_model_from_pkl(model_file)
@@ -207,6 +219,5 @@ if __name__ == '__main__':
             warnings, _ = deployment_warnings(preds, testing[p][file]['labels'])
             # visualize_with_warnings(testing[p][file], warnings, preds, file, n_channels)
             visualize_deployment(testing[p][file], preds, file, n_channels)
-
-    exit(1)
+    '''
 
